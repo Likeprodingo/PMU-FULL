@@ -70,6 +70,7 @@ public class MainActivity extends AppCompatActivity implements PostsAdapter.OnPo
         setContentView(R.layout.activity_main);
         final Context context = getApplicationContext();
         final FragmentManager fragmentManager = getSupportFragmentManager();
+        size = getDisplaySize();
         posts = new ArrayList<>();
 
         postsList = findViewById(R.id.rv);
@@ -129,7 +130,83 @@ public class MainActivity extends AppCompatActivity implements PostsAdapter.OnPo
                 }
             }
         }
+        else {
+            fDatabase = FirebaseDatabase.getInstance().getReference();
+            fDatabase.addValueEventListener(new ValueEventListener() {
+                @Override
+                public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                    loadPostsFromFirebase();
+                }
 
+                @Override
+                public void onCancelled(@NonNull DatabaseError databaseError) {
+
+                }
+            });
+
+
+
+            loadPostsFromFirebase();
+
+
+            if (intent.hasExtra("position")) {
+                String t_d_ip = intent.getStringExtra("t_d_ip");
+                fDatabase.child("Posts");
+
+                Query query = fDatabase.child("Posts").orderByChild("t_d_ip").equalTo(t_d_ip);
+                query.addListenerForSingleValueEvent(new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                        for (DataSnapshot numberSnapshot : dataSnapshot.getChildren()) {
+                            numberSnapshot.getRef().removeValue();
+                            posts.clear();
+                            loadPostsFromFirebase();
+                        }
+
+                    }
+
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError databaseError) {
+
+                    }
+                });
+
+            }
+            else {
+                loadPostsFromFirebase();
+            }
+
+        }
+
+
+        fab = findViewById(R.id.fab);
+        fab.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                FragmentTransaction fragmentTransaction = fragmentManager.beginTransaction();
+                fragment = new AddPost();
+                fragmentTransaction.add(R.id.host_activity, fragment);
+                fragmentTransaction.commit();
+                fab.setVisibility(View.INVISIBLE);
+            }
+        });
+
+        //postsAdapter = new PostsAdapter(posts, this);
+
+    }
+
+
+    public Point getDisplaySize() {
+        Display display = getWindowManager().getDefaultDisplay();
+        Point size = new Point();
+        display.getRealSize(size);
+        return size;
+    }
+
+    public void addPost(Post post){
+        posts.add(0, post);
+        postsAdapter.notifyItemInserted(0);
+        postsList.smoothScrollToPosition(0);
     }
 
     @Override
@@ -193,9 +270,67 @@ public class MainActivity extends AppCompatActivity implements PostsAdapter.OnPo
             postsFromSQL.add(0, p);
         }
         cursor.close();
+        if (postsFromSQL.isEmpty()) {
+            GetRSS getRSS = new GetRSS();
+            getRSS.execute().get();
+            List<Post> newPosts = getRSS.rssPosts;
+
+            for (Post p : newPosts) {
+                ContentValues values = new ContentValues();
+                values.put(PostsSQLite.PostsEntry.COLUMN_NAME_TITLE, p.title);
+                if (!p.description.isEmpty())
+                    values.put(PostsSQLite.PostsEntry.COLUMN_NAME_DESCRIPTION, p.description);
+                if (!p.getImageUrl().isEmpty())
+                    values.put(PostsSQLite.PostsEntry.COLUMN_NAME_IMAGE_PATH, p.getImageUrl());
+                long newRowId = db.insert(PostsSQLite.PostsEntry.TABLE_NAME, null, values);
+                postsFromSQL.add(0, p);
+            }
+
+        }
+        posts = postsFromSQL;
+        postsAdapter = new PostsAdapter(posts, MainActivity.this);
+        postsList.setAdapter(postsAdapter);
+    }
+
+    void initFireDatabase() {
+        ValueEventListener postListener = new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                Post post = dataSnapshot.getValue(Post.class);
+                posts.add(0, post);
+                postsAdapter = new PostsAdapter(posts, MainActivity.this);
+                postsList.setAdapter(postsAdapter);
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError databaseError) {
+                return;
+            }
+        };
+        fDatabase.addValueEventListener(postListener);
     }
 
 
+    void loadPostsFromFirebase() {
+        DatabaseReference ref = FirebaseDatabase.getInstance().getReference().child("Posts");
+        ref.addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                List<Post> postsFromDb = collectPosts((Map<String,Object>) dataSnapshot.getValue());
+
+
+                posts = postsFromDb;
+                postsAdapter = new PostsAdapter(posts, MainActivity.this);
+                postsList.setAdapter(postsAdapter);
+
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError databaseError) {
+
+            }
+        });
+    }
     List collectPosts(Map<String, Object> postsFromDb) {
         List<Post> ps = new ArrayList<>();
         if (postsFromDb != null) {
@@ -222,5 +357,75 @@ public class MainActivity extends AppCompatActivity implements PostsAdapter.OnPo
         Collections.reverse(ps);
         return ps;
     }
+
+}
+class GetRSS extends AsyncTask {
+    URL url;
+    List<Post> rssPosts = new ArrayList<>();
+    protected Object doInBackground(Object[] objects) {
+        try {
+            loadRSSfeed();
+
+        } catch (MalformedURLException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+    void loadRSSfeed() throws MalformedURLException {
+        URL url = new URL("https://lenta.ru/rss");
+        int counter = 0;
+        try {
+
+            XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
+            factory.setNamespaceAware(false);
+            XmlPullParser xpp = factory.newPullParser();
+            xpp.setInput(url.openConnection().getInputStream(), "UTF-8");
+            boolean insideItem = false;
+            Post p = new Post();
+            int eventType = xpp.getEventType();
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+
+                if (eventType == XmlPullParser.START_TAG) {
+                    if (xpp.getName().equalsIgnoreCase("item")) {
+                        p = new Post();
+                        insideItem = true;
+                    }
+                    else if (xpp.getName().equalsIgnoreCase("title")) {
+                        if (insideItem) {
+                            String title_= xpp.nextText();
+                            p.setTitle(title_);
+                        }
+                    }
+                    else if (xpp.getName().equalsIgnoreCase("description")) {
+                        if (insideItem) {
+                            String description_ = xpp.nextText();
+                            p.setDescription(description_);
+                        }
+                    }
+                    else if (xpp.getName().equalsIgnoreCase("enclosure")){
+                        if (insideItem) {
+                            String imgUrl = xpp.getAttributeValue(null, "url");
+                            p.setImageUrl(imgUrl);
+                        }
+                    }
+                }
+                else if (eventType == XmlPullParser.END_TAG && xpp.getName().equalsIgnoreCase("item")) {
+                    insideItem = false;
+                    counter++;
+                    rssPosts.add(0, p);
+                    if (counter > 13)
+                        return;
+                }
+                eventType = xpp.next();
+
+            }
+        } catch (XmlPullParserException | IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+
+
 
 }
