@@ -124,6 +124,16 @@ public class PostsAdapter extends RecyclerView.Adapter<PostsAdapter.PostsViewHol
         return posts.size();
     }
 
+    void saveData(Context context) {
+        try {
+            OutputStreamWriter outputStreamWriter = new OutputStreamWriter(context.openFileOutput("posts.txt", Context.MODE_PRIVATE));
+            outputStreamWriter.write("STRING");
+            outputStreamWriter.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
     public class PostsViewHolder extends RecyclerView.ViewHolder implements View.OnClickListener {
         TextView listItemPostTitle;
         TextView listItemPostDescription;
